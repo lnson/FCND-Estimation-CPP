@@ -93,10 +93,19 @@ void QuadEstimatorEKF::UpdateFromIMU(V3F accel, V3F gyro)
   // (replace the code below)
   // make sure you comment it out when you add your own code -- otherwise e.g. you might integrate yaw twice
 
-  float predictedPitch = pitchEst + dtIMU * gyro.y;
-  float predictedRoll = rollEst + dtIMU * gyro.x;
-  ekfState(6) = ekfState(6) + dtIMU * gyro.z;	// yaw
+  auto q = Quaternion<float>::FromEuler123_RPY(rollEst, pitchEst, ekfState(6));
+  q.IntegrateBodyRate(gyro, dtIMU);
+  
+  auto rpy = q.ToEulerRPY();
+  
+  float predictedRoll = rpy.x;
+  float predictedPitch = rpy.y;
+  ekfState(6) = rpy.z;
 
+  /*float predictedPitch = pitchEst + dtIMU * gyro.y;
+   float predictedRoll = rollEst + dtIMU * gyro.x;
+   ekfState(6) = ekfState(6) + dtIMU * gyro.z;  // yaw*/
+  
   // normalize yaw to -pi .. pi
   if (ekfState(6) > F_PI) ekfState(6) -= 2.f*F_PI;
   if (ekfState(6) < -F_PI) ekfState(6) += 2.f*F_PI;
@@ -161,8 +170,16 @@ VectorXf QuadEstimatorEKF::PredictState(VectorXf curState, float dt, V3F accel, 
   Quaternion<float> attitude = Quaternion<float>::FromEuler123_RPY(rollEst, pitchEst, curState(6));
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
-
+  for (int i = 0; i < 3; ++i) {
+    predictedState[i] += predictedState[i + 3] * dt;
+  }
+  
+  auto inertial_accel = attitude.Rotate_BtoI(accel);
+  inertial_accel[2] = CONST_GRAVITY - inertial_accel[2];
+  for (int i = 0; i < 3; ++i) {
+    predictedState[i + 3] += inertial_accel[i] * dt;
+  }
+  
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
   return predictedState;
@@ -188,11 +205,30 @@ MatrixXf QuadEstimatorEKF::GetRbgPrime(float roll, float pitch, float yaw)
   //   that your calculations are reasonable
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
+  RbgPrime(0, 0) = -cos(pitch) * sin(yaw);
+  RbgPrime(1, 0) = cos(pitch) * cos(yaw);
+  
+  RbgPrime(0, 1) = -sin(roll) * sin(pitch) * sin(yaw) - cos(roll) * cos(yaw);
+  RbgPrime(1, 1) = sin(roll) * sin(pitch) * cos(yaw) - cos(roll) * sin(yaw);
+  
+  RbgPrime(0, 2) = -cos(roll) * sin(pitch) * sin(yaw) + sin(roll) * cos(yaw);
+  RbgPrime(1, 2) = cos(roll) * sin(pitch) * cos(yaw) + sin(roll) * sin(yaw);
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
   return RbgPrime;
+}
+
+MatrixXf matmul(const MatrixXf& a, const MatrixXf& b) {
+  MatrixXf result(a.rows(), b.cols());
+  for (int i = 0; i < a.rows(); ++i) {
+    for (int j = 0; j < b.cols(); ++j) {
+      for (int k = 0; k < a.cols(); ++k) {
+        result(i, j) = a(i, k) * b(k, j);
+      }
+    }
+  }
+  return result;
 }
 
 void QuadEstimatorEKF::Predict(float dt, V3F accel, V3F gyro)
@@ -234,7 +270,21 @@ void QuadEstimatorEKF::Predict(float dt, V3F accel, V3F gyro)
   gPrime.setIdentity();
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
+  for (int i = 0; i < 3; ++i) {
+    gPrime(i, i + 3) = dt;
+  }
+  
+  for (int i = 0; i < 3; ++i) {
+    float t = 0;
+    for (int j = 0; j < 3; ++j) {
+      t += RbgPrime(i, j) * accel[j] * dt;
+    }
+    gPrime(i + 3, 6) = t;
+  }
+  
+  ekfCov = matmul(gPrime, ekfCov);
+  gPrime.transposeInPlace();
+  ekfCov = matmul(ekfCov, gPrime) + Q;
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
