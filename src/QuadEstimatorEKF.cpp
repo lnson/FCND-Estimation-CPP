@@ -1,3 +1,6 @@
+#include <iostream>
+#include <iomanip>
+
 #include "Common.h"
 #include "QuadEstimatorEKF.h"
 #include "Utility/SimpleConfig.h"
@@ -5,6 +8,21 @@
 #include "Math/Quaternion.h"
 
 using namespace SLR;
+
+namespace {
+  void DumpMatrix(const string& matrix_name, const MatrixXf mat) {
+    std::cout << matrix_name << std::endl;
+    for (int i = 0; i < mat.rows(); ++i) {
+      for (int j = 0; j < mat.cols(); ++ j) {
+        std::cout << std::fixed << std::setw( 9 ) << std::setprecision( 6 )
+        << std::setfill( '0' ) << mat(i, j) << " ";
+      }
+      std::cout << std::endl;
+    }
+  }
+  
+#define DUMP_MAT(x) DumpMatrix(#x, x)
+}
 
 const int QuadEstimatorEKF::QUAD_EKF_NUM_STATES;
 
@@ -175,7 +193,7 @@ VectorXf QuadEstimatorEKF::PredictState(VectorXf curState, float dt, V3F accel, 
   }
   
   auto inertial_accel = attitude.Rotate_BtoI(accel);
-  inertial_accel[2] = CONST_GRAVITY - inertial_accel[2];
+  inertial_accel[2] = -CONST_GRAVITY + inertial_accel[2];
   for (int i = 0; i < 3; ++i) {
     predictedState[i + 3] += inertial_accel[i] * dt;
   }
@@ -219,18 +237,6 @@ MatrixXf QuadEstimatorEKF::GetRbgPrime(float roll, float pitch, float yaw)
   return RbgPrime;
 }
 
-MatrixXf matmul(const MatrixXf& a, const MatrixXf& b) {
-  MatrixXf result(a.rows(), b.cols());
-  for (int i = 0; i < a.rows(); ++i) {
-    for (int j = 0; j < b.cols(); ++j) {
-      for (int k = 0; k < a.cols(); ++k) {
-        result(i, j) = a(i, k) * b(k, j);
-      }
-    }
-  }
-  return result;
-}
-
 void QuadEstimatorEKF::Predict(float dt, V3F accel, V3F gyro)
 {
   // predict the state forward
@@ -270,6 +276,11 @@ void QuadEstimatorEKF::Predict(float dt, V3F accel, V3F gyro)
   gPrime.setIdentity();
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+  Quaternion<float> attitude = EstimatedAttitude();
+  auto inertial_accel = attitude.Rotate_BtoI(accel);
+  inertial_accel[2] = -CONST_GRAVITY + inertial_accel[2];
+  accel = attitude.Rotate_ItoB(inertial_accel);
+  
   for (int i = 0; i < 3; ++i) {
     gPrime(i, i + 3) = dt;
   }
@@ -277,15 +288,16 @@ void QuadEstimatorEKF::Predict(float dt, V3F accel, V3F gyro)
   for (int i = 0; i < 3; ++i) {
     float t = 0;
     for (int j = 0; j < 3; ++j) {
-      t += RbgPrime(i, j) * accel[j] * dt;
+      t += RbgPrime(i, j) * accel[j];
     }
-    gPrime(i + 3, 6) = t;
+    gPrime(i + 3, 6) = t * dt;
   }
+  //DUMP_MAT(gPrime);
+  //DUMP_MAT(ekfCov);
   
-  ekfCov = matmul(gPrime, ekfCov);
-  gPrime.transposeInPlace();
-  ekfCov = matmul(ekfCov, gPrime) + Q;
+  ekfCov = gPrime * ekfCov * gPrime.transpose() + Q;
 
+  //DUMP_MAT(ekfState);
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
   ekfState = newState;
@@ -309,7 +321,12 @@ void QuadEstimatorEKF::UpdateFromGPS(V3F pos, V3F vel)
   //  - The GPS measurement covariance is available in member variable R_GPS
   //  - this is a very simple update
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
+  //DUMP_MAT(ekfState);
+  //cout << vel.z << std::endl;
+  for (int i = 0; i < 6; ++i) {
+    zFromX(i) = ekfState(i);
+    hPrime(i, i) = 1.0f;
+  }
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
   Update(z, hPrime, R_GPS, zFromX);
@@ -330,7 +347,14 @@ void QuadEstimatorEKF::UpdateFromMag(float magYaw)
   //    (you don't want to update your yaw the long way around the circle)
   //  - The magnetomer measurement covariance is available in member variable R_Mag
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
+  hPrime(6) = 1;
+  float dYaw = magYaw - ekfState(6);
+  if (dYaw < -F_PI) {
+    dYaw += 2.0f * F_PI;
+  } else if (dYaw > F_PI) {
+    dYaw -= 2.0f * F_PI;
+  }
+  zFromX(0) = magYaw - dYaw;
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
