@@ -276,11 +276,6 @@ void QuadEstimatorEKF::Predict(float dt, V3F accel, V3F gyro)
   gPrime.setIdentity();
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-  Quaternion<float> attitude = EstimatedAttitude();
-  auto inertial_accel = attitude.Rotate_BtoI(accel);
-  inertial_accel[2] = -CONST_GRAVITY + inertial_accel[2];
-  accel = attitude.Rotate_ItoB(inertial_accel);
-  
   for (int i = 0; i < 3; ++i) {
     gPrime(i, i + 3) = dt;
   }
